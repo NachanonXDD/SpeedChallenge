@@ -1,0 +1,219 @@
+// ============================================================
+//  CODE.GS — Google Apps Script Backend API
+//  ท้าทายขีดจำกัดความเร็ว | Speed Challenge System
+// ============================================================
+
+var SHEET_NAME = "SpeedChallenge";
+
+// ──────────────────────────────────────────────
+//  BUILD RESPONSE
+// ──────────────────────────────────────────────
+function buildResponse(data) {
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ──────────────────────────────────────────────
+//  doGet — ดึงข้อมูลทั้งหมด
+// ──────────────────────────────────────────────
+function doGet(e) {
+  try {
+    var action = e.parameter.action || "getAll";
+    if (action === "getAll") return getAllData();
+    return buildResponse({ status: "error", message: "Unknown action" });
+  } catch (err) {
+    return buildResponse({ status: "error", message: err.toString() });
+  }
+}
+
+function getAllData() {
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getOrCreateSheet(ss);
+  var lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) {
+    return buildResponse({ status: "success", data: [] });
+  }
+
+  var values = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  var result = [];
+
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    if (!row[1] && !row[2] && !row[6]) continue;
+
+    var ts = "";
+    if (row[0] instanceof Date) {
+      ts = Utilities.formatDate(
+        row[0], Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm:ss"
+      );
+    } else {
+      ts = row[0] ? String(row[0]) : "";
+    }
+
+    result.push({
+      rowNum:    i + 2,
+      timestamp: ts,
+      name:      row[1] ? String(row[1]).trim() : "",
+      studentId: row[2] ? String(row[2]).trim() : "",
+      major:     row[3] ? String(row[3]).trim() : "",
+      year:      row[4] ? String(row[4]).trim() : "",
+      phone:     row[5] ? String(row[5]).trim() : "",
+      distance:  row[6] ? parseFloat(row[6]) : 0,
+      gender:    row[7] ? String(row[7]).trim() : ""
+    });
+  }
+
+  return buildResponse({ status: "success", data: result });
+}
+
+// ──────────────────────────────────────────────
+//  doPost — save / update / delete
+// ──────────────────────────────────────────────
+function doPost(e) {
+  try {
+    var payload;
+    try {
+      payload = JSON.parse(e.postData.contents);
+    } catch (parseErr) {
+      return buildResponse({ status: "error", message: "Invalid JSON: " + parseErr.toString() });
+    }
+
+    if (payload.action === "save")   return saveData(payload);
+    if (payload.action === "update") return updateData(payload);
+    if (payload.action === "delete") return deleteData(payload);
+
+    return buildResponse({ status: "error", message: "Unknown action: " + payload.action });
+  } catch (err) {
+    return buildResponse({ status: "error", message: err.toString() });
+  }
+}
+
+// ──────────────────────────────────────────────
+//  saveData — บันทึกแถวใหม่
+// ──────────────────────────────────────────────
+function saveData(payload) {
+  if (!payload.name || !payload.studentId || !payload.major ||
+      !payload.year || !payload.phone || !payload.distance) {
+    return buildResponse({ status: "error", message: "ข้อมูลไม่ครบถ้วน" });
+  }
+
+  var dist = parseFloat(payload.distance);
+  if (isNaN(dist) || dist <= 0 || dist > 400) {
+    return buildResponse({ status: "error", message: "ระยะทางไม่ถูกต้อง (0–400 เมตร)" });
+  }
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getOrCreateSheet(ss);
+
+  sheet.appendRow([
+    new Date(),
+    String(payload.name).trim(),
+    String(payload.studentId).trim(),
+    String(payload.major).trim(),
+    String(payload.year).trim(),
+    String(payload.phone).trim(),
+    dist,
+    String(payload.gender || "").trim()
+  ]);
+
+  var lastRow = sheet.getLastRow();
+  sheet.getRange(lastRow, 1).setNumberFormat("dd/MM/yyyy HH:mm:ss");
+  sheet.getRange(lastRow, 7).setNumberFormat("0.0");
+
+  return buildResponse({ status: "success", message: "บันทึกเรียบร้อย", rowNum: lastRow });
+}
+
+// ──────────────────────────────────────────────
+//  updateData — แก้ไขแถวเดิม
+// ──────────────────────────────────────────────
+function updateData(payload) {
+  var rowNum = parseInt(payload.rowNum);
+  if (!rowNum || rowNum < 2) {
+    return buildResponse({ status: "error", message: "หมายเลขแถวไม่ถูกต้อง" });
+  }
+
+  var dist = parseFloat(payload.distance);
+  if (isNaN(dist) || dist <= 0 || dist > 400) {
+    return buildResponse({ status: "error", message: "ระยะทางไม่ถูกต้อง (0–400 เมตร)" });
+  }
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getOrCreateSheet(ss);
+
+  if (rowNum > sheet.getLastRow()) {
+    return buildResponse({ status: "error", message: "ไม่พบแถวที่ต้องการแก้ไข" });
+  }
+
+  sheet.getRange(rowNum, 2).setValue(String(payload.name).trim());
+  sheet.getRange(rowNum, 3).setValue(String(payload.studentId).trim());
+  sheet.getRange(rowNum, 4).setValue(String(payload.major).trim());
+  sheet.getRange(rowNum, 5).setValue(String(payload.year).trim());
+  sheet.getRange(rowNum, 6).setValue(String(payload.phone).trim());
+  sheet.getRange(rowNum, 7).setValue(dist);
+  sheet.getRange(rowNum, 8).setValue(String(payload.gender || "").trim());
+
+  return buildResponse({ status: "success", message: "แก้ไขเรียบร้อย", rowNum: rowNum });
+}
+
+// ──────────────────────────────────────────────
+//  deleteData — ลบแถว
+// ──────────────────────────────────────────────
+function deleteData(payload) {
+  var rowNum = parseInt(payload.rowNum);
+  if (!rowNum || rowNum < 2) {
+    return buildResponse({ status: "error", message: "หมายเลขแถวไม่ถูกต้อง" });
+  }
+
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getOrCreateSheet(ss);
+
+  if (rowNum > sheet.getLastRow()) {
+    return buildResponse({ status: "error", message: "ไม่พบแถวที่ต้องการลบ" });
+  }
+
+  sheet.deleteRow(rowNum);
+
+  return buildResponse({ status: "success", message: "ลบเรียบร้อย", deletedRow: rowNum });
+}
+
+// ──────────────────────────────────────────────
+//  getOrCreateSheet
+// ──────────────────────────────────────────────
+function getOrCreateSheet(ss) {
+  var sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+    sheet.appendRow([
+      "Timestamp", "Name", "Student ID",
+      "Major", "Year", "Phone", "Distance (m)", "Gender"
+    ]);
+    var headerRange = sheet.getRange(1, 1, 1, 8);
+    headerRange.setBackground("#0B0F1A");
+    headerRange.setFontColor("#FF6B00");
+    headerRange.setFontWeight("bold");
+    headerRange.setFontSize(11);
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidth(1, 160);
+    sheet.setColumnWidth(2, 180);
+    sheet.setColumnWidth(3, 130);
+    sheet.setColumnWidth(4, 160);
+    sheet.setColumnWidth(5, 80);
+    sheet.setColumnWidth(6, 110);
+    sheet.setColumnWidth(7, 110);
+    sheet.setColumnWidth(8, 80);
+  }
+  return sheet;
+}
+
+// ──────────────────────────────────────────────
+//  testSetup — รันทดสอบใน Script Editor
+// ──────────────────────────────────────────────
+function testSetup() {
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getOrCreateSheet(ss);
+  Logger.log("✅ Sheet: " + sheet.getName());
+  Logger.log("✅ Rows:  " + sheet.getLastRow());
+  Logger.log("✅ Ready!");
+}
